@@ -29,9 +29,16 @@ router.use(optionalAuthenticator);
  */
 function formatGroupForResponse(item) {
 	return {
-		id: item.id, name: item.name, gps: item.gps, displayable: item.displayable,
-		note: item.note, area: item.area, defaultGraphicUnit: item.defaultGraphicUnit,
-		deepMeters: item.children
+		id: item.id,
+		name: item.name,
+		gps: item.gps,
+		displayable: item.displayable,
+		note: item.note,
+		area: item.area,
+		defaultGraphicUnit: item.defaultGraphicUnit,
+		deepMeters: item.children,
+		childGroups: item.childGroups,
+		childMeters: item.childMeters
 	};
 }
 
@@ -55,8 +62,12 @@ router.get('/', async (req, res) => {
 		// TODO??? currently have a separate route to get all children that should be removed or modified including uses.
 		deepChildren = [];
 		promises = await rows.map(async (row) => {
-			const deepChildren = await Group.getDeepMetersByGroupID(row.id, conn);
-			return { ...row, children: deepChildren };
+			const [meters, groups, deepMeters] = await Promise.all([
+				Group.getImmediateMetersByGroupID(row.id, conn),
+				Group.getImmediateGroupsByGroupID(row.id, conn),
+				Group.getDeepMetersByGroupID(row.id, conn)
+			]);
+			return { ...row, children: deepMeters, childMeters: meters, childGroups: groups };
 		})
 		Promise.all(promises).then(function (values) {
 			res.json(values.map(formatGroupForResponse));
@@ -150,10 +161,36 @@ router.get('/deep/meters/:group_id', async (req, res) => {
 	}
 });
 
+router.get('/parents/:group_id', async (req, res) => {
+	const validParams = {
+		type: 'object',
+		maxProperties: 1,
+		required: ['group_id'],
+		properties: {
+			group_id: {
+				type: 'string',
+				pattern: '^\\d+$'
+			}
+		}
+	};
+	if (!validate(req.params, validParams).valid) {
+		res.sendStatus(400);
+	} else {
+		const conn = getConnection();
+		try {
+			const parentGroups = await Group.getParentsByGroupID(req.params.group_id, conn);
+			res.json(parentGroups);
+		} catch (err) {
+			log.error(`Error while preforming GET on all parents of specific group: ${err}`, err);
+			res.sendStatus(500);
+		}
+	}
+});
+
 router.post('/create', adminAuthenticator('create groups'), async (req, res) => {
 	const validGroup = {
 		type: 'object',
-		maxProperties: 7,
+		maxProperties: 8,
 		required: ['name', 'childGroups', 'childMeters'],
 		properties: {
 			name: {
@@ -201,7 +238,8 @@ router.post('/create', adminAuthenticator('create groups'), async (req, res) => 
 				items: {
 					type: 'integer'
 				}
-			}
+			},
+			defaultGraphicUnit: { type: 'integer' }
 		}
 	};
 
@@ -219,7 +257,8 @@ router.post('/create', adminAuthenticator('create groups'), async (req, res) => 
 					req.body.displayable,
 					newGPS,
 					req.body.note,
-					req.body.area
+					req.body.area,
+					req.body.defaultGraphicUnit
 				);
 
 				await newGroup.insert(t);
@@ -242,7 +281,7 @@ router.post('/create', adminAuthenticator('create groups'), async (req, res) => 
 router.put('/edit', adminAuthenticator('edit groups'), async (req, res) => {
 	const validGroup = {
 		type: 'object',
-		maxProperties: 8,
+		maxProperties: 9,
 		required: ['id', 'name', 'childGroups', 'childMeters'],
 		properties: {
 			id: { type: 'integer' },
@@ -291,7 +330,8 @@ router.put('/edit', adminAuthenticator('edit groups'), async (req, res) => {
 				items: {
 					type: 'integer'
 				}
-			}
+			},
+			defaultGraphicUnit: { type: 'integer' }
 		}
 	};
 
@@ -313,7 +353,8 @@ router.put('/edit', adminAuthenticator('edit groups'), async (req, res) => {
 					req.body.displayable,
 					newGPS,
 					req.body.note,
-					req.body.area
+					req.body.area,
+					req.body.defaultGraphicUnit
 				);
 
 				await newGroup.update(t);
